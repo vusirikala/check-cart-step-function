@@ -11,7 +11,7 @@ module.exports.handler = async({bookId, quantity}) => {
         let params = {
             TableName: 'bookTable',
             KeyConditionExpression: 'bookId = :bookId',
-            ExpressionAttributevalues: {
+            ExpressionAttributeValues: {
                 ":bookId": bookId
             }
         }
@@ -25,10 +25,10 @@ module.exports.handler = async({bookId, quantity}) => {
             throw bookOutOfStockError
         } 
     } catch (err) {
-        if (e.name === 'BookOutOfStock') {
-            throw e;
+        if (err.name === 'BookOutOfStock') {
+            throw err;
         } else {
-            let bookNotFoundError = new Error(e);
+            let bookNotFoundError = new Error(err);
             bookNotFoundError.name = 'BookNotFound';
             throw bookNotFoundError;
         }

@@ -26,12 +26,33 @@ stepFunctions:
                 Next: BookNotFoundError
               - ErrorEquals: [BookOutOfStock]
                 Next: BookOutOfStockError
+            ResultPath: "$.book"          #The entire input object is represented by $. We are adding a new attribute called "book"
             Next: calculateTotal
 
           calculateTotal: 
             Type: Task
             Resource: {"Fn::GetAtt": ["calculateTotal", "Arn"]}
             End: true
+            ResultPath: "$.total"        #The entire input object is represented by $. We are adding a new attribute called "book"
+          
+          isReedemNeeded: 
+            Type: Choice
+            Choices: 
+              - Variable: $.reedem
+                BooleanEquals: true
+                Next: ReedemPoints
+            Default: BillCustomer
+
+          RedeemPoints: 
+            Type: Task
+            Resource: {"Fn::GetAtt": ["redeemPoints", "Arn"]}
+            Next: BillCustomer
+
+          BillCustomer: 
+            Type: Task
+            Resource: {"Fn::GetAtt": ["billCustomer", "Arn"]}
+            Next: PreparOrder
+
           
           BookNotFoundError:
             Type: Pass
@@ -49,10 +70,16 @@ functions:
     iamRoleStatements:
       - Effect: Allow
         Resource: {"Fn::GetAtt": ["BooksTable", "Arn"]}
-        Action: "dynmodb:getItem"
+        Action: "dynmodb:*"
 
   calculateTotal:
     handler: functions/calculateTotal.handler
+
+  redeemPoints:
+    handler: functions/redeemPoints.handler
+
+  billCustomer:
+    handler: functions/billCustomer.handler
 
 
 # you can add CloudFormation resource templates here
