@@ -67,8 +67,43 @@ stepFunctions:
 
           PrepareOrder: 
             Type: Task
-            Resource: {"Fn::GetAtt": ["prepareOrder", "Arn"]}
+            Resource: arn:aws:states:::sqs:sendMessage.waitForTaskToken     #The step function will send message to the SQS queue. 
+            Parameters:
+              QueueUrl: {"Fn::GetAtt" : [ "Queue", "QueueUrl" ]}
+              MessageBody: 
+                Input.$: "$"  #$ represents the entire message object
+                Token.$: "$$.Task.Token"  #$$ represents context object of the state machine
+            ResultPath: "$.courierStatus"
+            Catch:
+              - ErrorEquals: [NoCourierAvailable]
+                ResultPath: "$.courierError"
+                Next: RefundCustomer
+            Next: DispatchOrder
+
+          DispatchOrder: 
+            Type: Task
+            Resource: arn:aws:states:::sns:publish 
+            Parameters:
+              TopicArn: {"Fn::GetAtt" : [ "SNSDispatchTopic", "TopicArn" ]}
+              Message.$: "$"     #Passing on the entire message object. When we are passing on a dynamic object like this, we need to have ".$" in the end of the key. 
+            Next: Dispatched
+
+          Dispatched: 
+            Type: Pass
+            Result: "Dispatched to customer"
             End: true
+
+          RefundCustomer: 
+            Type: Pass
+            Result: "Customer is refunded"
+            ResultPath: "$.refundStatus"
+            Next: RestoreQuantity
+          
+          RestoreQuantity:
+            Type: Task
+            Resource: {"Fn::GetAtt": ["restoreQuantity", "Arn"]}
+            ResultPath: "$.quantityRestoreStatus"
+            Next: RestoreRedeemPoints
 
           BookNotFoundError:
             Type: Pass
@@ -123,6 +158,33 @@ functions:
   restoreRedeemPoints:
     handler: functions/restoreRedeemPoints.handler
 
+  sqsWorker:      #Picks messages from SQS queue and process them. 
+    handler: functions/sqsWorker.handler
+    events:
+      - sqs: 
+          arn: {"Fn::GetAtt" : [ "Queue", "Arn" ]}
+          batchSize: 1
+    iamRoleStatements:
+      - Effect: Allow
+        Resource: {"Fn::GetAtt": ["BooksTable", "Arn"]}
+        Action: "dynamodb:*"
+      - Effect: Allow
+        Resource: ${self:resources.Outputs.storeCheckoutFlow.Value}  #{"Fn::GetAtt": ["storeCheckoutFlow", "Arn"]}
+        Action: 
+          - "states:SendTaskSuccess"
+      - Effect: Allow
+        Resource: ${self:resources.Outputs.storeCheckoutFlow.Value}  #{"Fn::GetAtt": ["storeCheckoutFlow", "Arn"]}  
+        Action: 
+          - "states:SendTaskFailure"
+
+  restoreQuantity: 
+    handler: functions/restoreQuantity.handler
+    iamRoleStatements:
+      - Effect: Allow
+        Resource: {"Fn::GetAtt": ["UsersTable", "Arn"]}
+        Action: "dynamodb:*"
+
+
 # you can add CloudFormation resource templates here
 resources:
   Resources:
@@ -151,7 +213,59 @@ resources:
             AttributeType: S
         BillingMode: PAY_PER_REQUEST
 
-      
+
+    Queue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: MESSAGE_QUEUE
+
+    QueuePolicy:                        # IAM Resource policy for the event bridge to send messages to the queue
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues: 
+          - { Ref: 'Queue' }
+        PolicyDocument: 
+          Statement: 
+            - Action: "SQS:SendMessage"
+              Effect: "Allow"
+              Resource: {"Fn::GetAtt" : [ "Queue", "Arn" ]}
+              Principal:                  # Principal is required for the resource-based IAM policies. What are the entitites that are allowed to use this permission? The principal could be any AWS service, IAM user, AWS account, another AWS account, etc. 
+                Service: states.${self:provider.region}.amazonaws.com   #Principal for step function
+
+    SNSDispatchTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: DispatchProduct
+
+    SNSSubscription:
+      Type: AWS::SNS::Subscription
+      Properties: 
+        TopicArn: { "Ref" : "SNSDispatchTopic" } 
+        Protocol: "email"
+        Endpoint: "satyasatya123456@gmail.com"
+    
+    SNSDispatchTopicPolicy:
+      Type: AWS::SNS::TopicPolicy
+      Properties: 
+        PolicyDocument:
+          Id: SNSDispatchTopicPolicyId
+          Version: '2012-10-17'
+          Statement:
+            - Sid: SNSDispatchTopicStatementId
+              Effect: Allow
+              Action: sns:Publish
+              Resource: { "Ref" : "SNSDispatchTopic" } 
+              Principal:
+                Service: states.${self:provider.region}.amazonaws.com
+        Topics: 
+          - { "Ref" : "SNSDispatchTopic" } 
+  
+  
+  Outputs:
+    storeCheckoutFlow:
+      Description: The ARN of the checkout flow state machine
+      Value:
+        Ref: StoreCheckoutFlow
 #  Outputs:
 #     NewOutput:
 #       Description: "Description for the output"
