@@ -32,28 +32,44 @@ stepFunctions:
           calculateTotal: 
             Type: Task
             Resource: {"Fn::GetAtt": ["calculateTotal", "Arn"]}
-            End: true
+            Next: isRedeemNeeded
             ResultPath: "$.total"        #The entire input object is represented by $. We are adding a new attribute called "book"
           
-          isReedemNeeded: 
+          isRedeemNeeded: 
             Type: Choice
             Choices: 
-              - Variable: $.reedem
+              - Variable: $.redeem
                 BooleanEquals: true
-                Next: ReedemPoints
+                Next: RedeemPoints
             Default: BillCustomer
 
           RedeemPoints: 
             Type: Task
             Resource: {"Fn::GetAtt": ["redeemPoints", "Arn"]}
+            Catch: 
+              - ErrorEquals: [States.ALL]
+                Next: RedeemPointsError
+            ResultPath: "$.total"           #The previous "total" in the state will be replaced by the new one. The new "total" has redeem points as well. 
             Next: BillCustomer
 
           BillCustomer: 
             Type: Task
             Resource: {"Fn::GetAtt": ["billCustomer", "Arn"]}
-            Next: PreparOrder
+            ResultPath: "$.billingStatus"
+            Retry: 
+              - ErrorEquals: [States.ALL]   #If any error occurs, retry up to 3 times before going to the Catch block. 
+                MaxAttempts: 3
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: "$.customerBilling" #The exception will be added to this variable of the state.
+                Next: BillingError 
+            Next: PrepareOrder
 
-          
+          PrepareOrder: 
+            Type: Task
+            Resource: {"Fn::GetAtt": ["prepareOrder", "Arn"]}
+            End: true
+
           BookNotFoundError:
             Type: Pass
             Result: "No such book avaialable"
@@ -63,6 +79,22 @@ stepFunctions:
             Type: Pass
             Result: "Sorry, the book is out of stock"
             End: true
+
+          RedeemPointsError:
+            Type: Pass
+            Result: "Sorry, unable to redeem points"
+            End: true
+          
+          BillingError:
+            Type: Pass
+            Result: "Billing Error"
+            ResultPath: "$.billingStatus"   #Adding a new variable because we don't want the result to replace other information. 
+            Next: RestoreRedeemPoints   #If there is a billing error, restore redeem points
+          
+          RestoreRedeemPoints: 
+            Type: Task
+            Resource: {"Fn::GetAtt": ["restoreRedeemPoints", "Arn"]}
+            End: true 
           
 functions:
   checkInventory:
@@ -70,21 +102,31 @@ functions:
     iamRoleStatements:
       - Effect: Allow
         Resource: {"Fn::GetAtt": ["BooksTable", "Arn"]}
-        Action: "dynmodb:*"
+        Action: "dynamodb:*"
 
   calculateTotal:
     handler: functions/calculateTotal.handler
 
   redeemPoints:
     handler: functions/redeemPoints.handler
+    iamRoleStatements:
+      - Effect: Allow
+        Resource: {"Fn::GetAtt": ["UsersTable", "Arn"]}
+        Action: "dynamodb:*"
 
   billCustomer:
     handler: functions/billCustomer.handler
 
+  prepareOrder: 
+    handler: functions/prepareOrder.handler
+
+  restoreRedeemPoints:
+    handler: functions/restoreRedeemPoints.handler
 
 # you can add CloudFormation resource templates here
 resources:
   Resources:
+
     BooksTable:
       Type: AWS::DynamoDB::Table
       Properties:
@@ -94,6 +136,18 @@ resources:
             KeyType: HASH
         AttributeDefinitions:
           - AttributeName: bookId
+            AttributeType: S
+        BillingMode: PAY_PER_REQUEST
+
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: userTable
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+        AttributeDefinitions:
+          - AttributeName: userId
             AttributeType: S
         BillingMode: PAY_PER_REQUEST
 
