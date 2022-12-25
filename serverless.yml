@@ -8,6 +8,7 @@ provider:
 
 plugins: 
   - serverless-step-functions
+  - serverless-iam-roles-per-function
 
 stepFunctions:
   stateMachines:
@@ -45,17 +46,31 @@ stepFunctions:
 functions:
   checkInventory:
     handler: functions/checkInventory.handler
+    iamRoleStatements:
+      - Effect: Allow
+        Resource: {"Fn::GetAtt": ["BooksTable", "Arn"]}
+        Action: "dynmodb:getItem"
+
   calculateTotal:
     handler: functions/calculateTotal.handler
 
 
 # you can add CloudFormation resource templates here
-# resources:
-#  Resources:
-#    NewResource:
-#      Type: AWS::S3::Bucket
-#      Properties:
-#        BucketName: my-new-bucket
+resources:
+  Resources:
+    BooksTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: bookTable
+        KeySchema:
+          - AttributeName: bookId
+            KeyType: HASH
+        AttributeDefinitions:
+          - AttributeName: bookId
+            AttributeType: S
+        BillingMode: PAY_PER_REQUEST
+
+      
 #  Outputs:
 #     NewOutput:
 #       Description: "Description for the output"
